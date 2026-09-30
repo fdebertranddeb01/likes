@@ -18,26 +18,34 @@ along with CoursBeuvron.  If not, see <http://www.gnu.org/licenses/>.
  */
 package fr.insa.toto.model;
 
-import fr.insa.beuvron.utils.ConsoleFdB;
-import fr.insa.beuvron.utils.database.ClasseMiroir;
 import java.io.Serializable;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import fr.insa.beuvron.utils.ConsoleFdB;
+
 /**
- *
+ * Une petite classe "miroir" pour représenter un utilisateur de l'application.
+ * <p>
+ * convention pour les identifiants :
+ * <ul>
+ * <li>-1 signifie que l'objet n'a pas encore été sauvegardé dans la base de
+ * données.</li>
+ * <li>un identifiant positif est celui attribué par la base de données.</li>
+ * </ul>
+ * 
  * @author francois
  */
-public class Utilisateur extends ClasseMiroir implements Serializable {
-    
+public class Utilisateur implements Serializable {
+
     private static final long serialVersionUID = 1L;
-    
+
+    private int id = -1;
     private String surnom;
     private String pass;
     private int role;
@@ -46,17 +54,14 @@ public class Utilisateur extends ClasseMiroir implements Serializable {
      * pour nouvel utilisateur en mémoire
      */
     public Utilisateur(String surnom, String pass, int role) {
-        super();
-        this.surnom = surnom;
-        this.pass = pass;
-        this.role = role;
+        this(-1, surnom, pass, role);
     }
 
     /**
      * pour utilisateur récupéré de la base de données
      */
     public Utilisateur(int id, String surnom, String pass, int role) {
-        super(id);
+        this.id = id;
         this.surnom = surnom;
         this.pass = pass;
         this.role = role;
@@ -66,17 +71,110 @@ public class Utilisateur extends ClasseMiroir implements Serializable {
     public String toString() {
         return "Utilisateur{" + "id=" + this.getId() + "surnom=" + surnom + ", role=" + role + '}';
     }
-    
+
+    /** pour gérer l'égalité des objets en tenant compte de leur état de sauvegarde dans la base de données :
+     * - si les deux objets ont un id positif, on compare les id
+     * - si les deux objets ont un id négatif, on compare les références (super.equals)
+     * - si un objet a un id positif et l'autre un id négatif, ils ne sont pas égaux
+     */
     @Override
-    public Statement saveSansId(Connection con) throws SQLException {
-        PreparedStatement insert = con.prepareStatement(
+    public boolean equals(Object obj) {
+        if (this == obj) {
+            return true;
+        }
+        if (obj == null) {
+            return false;
+        }
+        if (this.getClass() != obj.getClass()) {
+            return false;
+        }
+        final Utilisateur other = (Utilisateur) obj;
+        if (this.getId() == -1) {
+            if (other.getId() == -1) {
+                return super.equals(obj);
+            } else {
+                return false;
+            }
+        } else {
+            if (other.getId() == -1) {
+                return false;
+            } else {
+                return this.getId() == other.getId();
+            }
+        }
+    }
+
+    @Override
+    public int hashCode() {
+        if (this.getId() == -1) {
+            return super.hashCode();
+        } else {
+            return this.getId();
+        }
+    }
+
+    public void saveInDB(Connection con) throws SQLException {
+        if (this.getId() != -1) {
+            throw new SQLException("Utilisateur déjà sauvegardé dans la base de données");
+        }
+        try (PreparedStatement insert = con.prepareStatement(
                 "insert into utilisateur (surnom,pass,role) values (?,?,?)",
-                PreparedStatement.RETURN_GENERATED_KEYS);
-        insert.setString(1, this.getSurnom());
-        insert.setString(2, this.getPass());
-        insert.setInt(3, getRole());
-        insert.executeUpdate();
-        return insert;
+                PreparedStatement.RETURN_GENERATED_KEYS)) {
+            insert.setString(1, this.getSurnom());
+            insert.setString(2, this.getPass());
+            insert.setInt(3, getRole());
+            insert.executeUpdate();
+            ResultSet rs = insert.getGeneratedKeys();
+            if (rs.next()) {
+                this.id = rs.getInt(1);
+            } else {
+                throw new SQLException("aucun id généré");
+            }
+        }
+    }
+
+    /**
+     * supprime l'utilisateur de la BdD. Attention : supprime d'abord les
+     * éventuelles dépendances.
+     *
+     * @param con
+     * @throws SQLException
+     */
+    public void deleteInDB(Connection con) throws SQLException {
+        if (this.getId() == -1) {
+            throw new SQLException("Utilisateur non sauvegardé dans la base de données");
+        }
+        try {
+            con.setAutoCommit(false);
+            try (PreparedStatement pst = con.prepareStatement(
+                    "delete from pratique where idutilisateur = ?")) {
+                pst.setInt(1, this.getId());
+                pst.executeUpdate();
+            }
+            try (PreparedStatement pst = con.prepareStatement(
+                    "delete from apprecie where u1 = ?")) {
+                pst.setInt(1, this.getId());
+                pst.executeUpdate();
+            }
+            try (PreparedStatement pst = con.prepareStatement(
+                    "delete from apprecie where u2 = ?")) {
+                pst.setInt(1, this.getId());
+                pst.executeUpdate();
+            }
+
+            try (PreparedStatement pst = con.prepareStatement(
+                    "delete from utilisateur where id = ?")) {
+                pst.setInt(1, this.getId());
+                pst.executeUpdate();
+            }
+            this.id = -1;
+            con.commit();
+        } catch (SQLException ex) {
+            con.rollback();
+            throw ex;
+        } finally {
+            con.setAutoCommit(true);
+        }
     }
 
     /**
@@ -92,9 +190,9 @@ public class Utilisateur extends ClasseMiroir implements Serializable {
                     users.getString("pass"), users.getInt("role")));
         }
         return res;
-        
+
     }
-    
+
     public static List<Utilisateur> tousLesUtilisateur(Connection con) throws SQLException {
         try (PreparedStatement pst = con.prepareStatement("select id,surnom,pass,role from utilisateur")) {
             try (ResultSet allU = pst.executeQuery()) {
@@ -102,20 +200,21 @@ public class Utilisateur extends ClasseMiroir implements Serializable {
             }
         }
     }
-    
+
     public static List<Utilisateur> utilisateursAppreciesPar(Connection con, Utilisateur u1) throws SQLException {
         try (PreparedStatement pst = con.prepareStatement(
                 "select id,surnom,pass,role \n"
-                + " from utilisateur join apprecie on apprecie.u2 = utilisateur.id \n"
-                + " where apprecie.u1 = ?")) {
+                        + " from utilisateur join apprecie on apprecie.u2 = utilisateur.id \n"
+                        + " where apprecie.u1 = ?")) {
             pst.setInt(1, u1.getId());
             try (ResultSet allU = pst.executeQuery()) {
                 return fromResultSetToList(allU);
             }
         }
     }
-    
-    public static Optional<Utilisateur> findBySurnomPass(Connection con, String surnom, String pass) throws SQLException {
+
+    public static Optional<Utilisateur> findBySurnomPass(Connection con, String surnom, String pass)
+            throws SQLException {
         try (PreparedStatement pst = con.prepareStatement(
                 "select id,role from utilisateur where surnom = ? and pass = ?")) {
             pst.setString(1, surnom);
@@ -128,11 +227,12 @@ public class Utilisateur extends ClasseMiroir implements Serializable {
             } else {
                 return Optional.empty();
             }
-            
+
         }
     }
-    
-    public static void changeApprecie(Connection con,Utilisateur u,List<Utilisateur> appreciesParU) throws SQLException {
+
+    public static void changeApprecie(Connection con, Utilisateur u, List<Utilisateur> appreciesParU)
+            throws SQLException {
         try {
             con.setAutoCommit(false);
             // je supprime tous les anciens
@@ -157,54 +257,14 @@ public class Utilisateur extends ClasseMiroir implements Serializable {
         }
     }
 
-    /**
-     * supprime l'utilisateur de la BdD. Attention : supprime d'abord les
-     * éventuelles dépendances.
-     *
-     * @param con
-     * @throws SQLException
-     */
-    public void deleteInDB(Connection con) throws SQLException {
-        if (this.getId() == -1) {
-            throw new ClasseMiroir.EntiteNonSauvegardee();
-        }
-        try {
-            con.setAutoCommit(false);
-            try (PreparedStatement pst = con.prepareStatement(
-                    "delete from pratique where idutilisateur = ?")) {
-                pst.setInt(1, this.getId());
-                pst.executeUpdate();
-            }
-            try (PreparedStatement pst = con.prepareStatement(
-                    "delete from apprecie where u1 = ?")) {
-                pst.setInt(1, this.getId());
-                pst.executeUpdate();
-            }
-            try (PreparedStatement pst = con.prepareStatement(
-                    "delete from apprecie where u2 = ?")) {
-                pst.setInt(1, this.getId());
-                pst.executeUpdate();
-            }
-            
-            try (PreparedStatement pst = con.prepareStatement(
-                    "delete from utilisateur where id = ?")) {
-                pst.setInt(1, this.getId());
-                pst.executeUpdate();
-            }
-            this.entiteSupprimee();
-            con.commit();
-        } catch (SQLException ex) {
-            con.rollback();
-            throw ex;
-        } finally {
-            con.setAutoCommit(true);
-        }
-    }
-    
     public static Utilisateur entreeConsole() {
         String nom = ConsoleFdB.entreeString("surnom de l'utilisateur : ");
         String pass = ConsoleFdB.entreeString("password : ");
         return new Utilisateur(nom, pass, 2);
+    }
+
+    public int getId() {
+        return id;
     }
 
     /**
@@ -248,5 +308,5 @@ public class Utilisateur extends ClasseMiroir implements Serializable {
     public void setRole(int role) {
         this.role = role;
     }
-    
+
 }

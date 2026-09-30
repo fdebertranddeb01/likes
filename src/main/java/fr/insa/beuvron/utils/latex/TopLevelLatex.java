@@ -18,9 +18,6 @@
  */
 package fr.insa.beuvron.utils.latex;
 
-import java.io.StringWriter;
-import java.util.List;
-
 /**
  * ajoute les includes après collect dans la forme finale toLatex
  * @author francois

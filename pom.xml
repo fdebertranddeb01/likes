@@ -7,7 +7,7 @@
     <groupId>fr.insa.beuvron</groupId>
     <artifactId>likes</artifactId>
     <version>1.0-SNAPSHOT</version>
-    <packaging>jar</packaging>
+    <packaging>war</packaging>
 
     <properties>
         <java.version>25</java.version>
